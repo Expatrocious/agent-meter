@@ -55,6 +55,10 @@ Logs: `journalctl --user -u agent-meter`.
 `tests/run.sh` loads the page in headless Chromium at the r1's 240x282 and
 answers GitHub's requests itself (35 checks: rings, countdowns, side button,
 wheel, rate-limit fallback, offline, stale PC, errors, layout fits).
+`python3 -I tests/test_publisher.py` checks the PC side offline (fake gh and
+Claude: what gets written, when, and that the gist id never reaches the logs).
+
+To go live (repo, Pages, gist, service, QR) run `./go-live.sh` once.
 
 ## Credits
 

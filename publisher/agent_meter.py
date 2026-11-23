@@ -16,6 +16,7 @@ is the gh CLI's own login; this program never sees the token.
   agent-meter usage     print the usage JSON (publishes nothing)
   agent-meter url       print the creation's address (it contains the gist id)
   agent-meter qr        write the install QR to ~/Pictures/agent-meter-qr.png
+  agent-meter qr-text   print what the QR holds (for a terminal QR: qrencode -t ANSIUTF8)
   agent-meter rotate    new secret gist; old QR codes stop working
 
 Agents (add more to AGENTS at the bottom):
@@ -285,27 +286,41 @@ def publish(doc, conf):
     gist_write(conf["gist"], json.dumps(doc, separators=(",", ":")))
 
 
+class Publisher:
+    """Reads on a timer; writes the gist when the r1 would show something new."""
+
+    def __init__(self, conf):
+        self.conf = conf
+        self.last_print, self.last_push, self.next_read = None, 0.0, 0.0
+
+    def step(self, now):
+        if now < self.next_read:
+            return False
+        doc = read_all()
+        fp = fingerprint(doc)
+        self.next_read = now + (READ_EVERY if all(not a.error for a in AGENTS) else RETRY)
+        if fp == self.last_print and now - self.last_push < HEARTBEAT:
+            return False
+        try:
+            publish(doc, self.conf)
+        except Exception as e:
+            log("publish failed: " + scrub(e, self.conf))
+            self.next_read = now + RETRY
+            return False
+        self.last_print, self.last_push = fp, now
+        return True
+
+
 def run():
     conf = load_conf()
     if not conf.get("gist"):
         log("no gist yet: run `agent-meter setup` once")
         sys.exit(2)
     load_last()
-    last_print, last_push, next_read = None, 0.0, 0.0
+    pub = Publisher(conf)
     log(f"publishing every change (reads every {READ_EVERY}s, heartbeat {HEARTBEAT}s)")
     while True:
-        now = time.time()
-        if now >= next_read:
-            doc = read_all()
-            fp = fingerprint(doc)
-            next_read = now + (READ_EVERY if all(not a.error for a in AGENTS) else RETRY)
-            if fp != last_print or now - last_push >= HEARTBEAT:
-                try:
-                    publish(doc, conf)
-                    last_print, last_push = fp, now
-                except Exception as e:
-                    log("publish failed: " + scrub(e, conf))
-                    next_read = now + RETRY
+        pub.step(time.time())
         time.sleep(5)
 
 
@@ -354,12 +369,16 @@ def rotate():
     print("new secret gist; scan the new QR on the r1 (the old one has stopped updating)")
 
 
-def write_qr(conf):
-    url = creation_url(conf)
+def qr_payload(conf):
+    """What the r1 reads from the install QR (rabbit's creation format)."""
     pages = conf.get("pages") or PAGES
-    payload = json.dumps({"title": "agent meter", "url": url,
-                          "description": "Claude usage at a glance",
-                          "iconUrl": pages + "icon.png", "themeColor": "#ff5300"}, separators=(",", ":"))
+    return json.dumps({"title": "agent meter", "url": creation_url(conf),
+                       "description": "Claude usage at a glance",
+                       "iconUrl": pages + "icon.png", "themeColor": "#ff5300"}, separators=(",", ":"))
+
+
+def write_qr(conf):
+    payload = qr_payload(conf)
     QR_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = QR_FILE.with_name(".agent-meter-qr.tmp.png")
     subprocess.run(["qrencode", "-o", str(tmp), "-s", "10", "-m", "3", "-l", "M", payload], check=True)
@@ -384,6 +403,11 @@ def main():
         print(creation_url() or "not set up: run `agent-meter setup`")
     elif cmd == "qr":
         write_qr(load_conf())
+    elif cmd == "qr-text":
+        conf = load_conf()
+        if not conf.get("gist"):
+            sys.exit("not set up: run `agent-meter setup`")
+        print(qr_payload(conf))
     elif cmd == "rotate":
         rotate()
     else:
